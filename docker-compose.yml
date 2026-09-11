@@ -1,0 +1,139 @@
+# Banco LoRaWAN — ChirpStack v4 + Mosquitto + Postgres + Redis
+#
+# Recibe el tráfico del gateway Milesight (EUI 24E124FFFEFAFC09) por Semtech UDP
+# en el puerto 1700 y lo publica descifrado en MQTT.
+#
+# Arranque:  cp .env.example .env  &&  docker compose up -d
+# Web:       http://localhost:8080   (admin / admin)
+#
+# Ojo con UDP_BIND_ADDR (ver .env.example): mientras la interfaz del cable no
+# tenga IP, tiene que quedar en 0.0.0.0 o Docker no puede bindear el puerto.
+
+name: lorawan-stack
+
+services:
+
+  # ---------------------------------------------------------------------------
+  # Network Server: descifra, deduplica, gestiona sesiones y sirve la web.
+  # ---------------------------------------------------------------------------
+  chirpstack:
+    image: chirpstack/chirpstack:4
+    container_name: lorawan-chirpstack
+    restart: unless-stopped
+    command: -c /etc/chirpstack
+    volumes:
+      - ./configuration/chirpstack:/etc/chirpstack:ro
+    environment:
+      - MQTT_BROKER_HOST=mosquitto
+      - REDIS_HOST=redis
+      - POSTGRESQL_HOST=postgres
+      - POSTGRESQL_PASSWORD=${POSTGRESQL_PASSWORD}
+      - CHIRPSTACK_API_SECRET=${CHIRPSTACK_API_SECRET}
+    ports:
+      # Solo localhost: la web es para el navegador de la notebook, no para la
+      # red de la facultad ni para el gateway.
+      - "127.0.0.1:8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      mosquitto:
+        condition: service_started
+    networks:
+      - lorawan-network
+
+  # ---------------------------------------------------------------------------
+  # Gateway Bridge: traduce Semtech UDP (lo que habla el Milesight) <-> MQTT.
+  # Es el único servicio que el gateway toca directamente.
+  # ---------------------------------------------------------------------------
+  chirpstack-gateway-bridge:
+    image: chirpstack/chirpstack-gateway-bridge:4
+    container_name: lorawan-gateway-bridge
+    restart: unless-stopped
+    ports:
+      - "${UDP_BIND_ADDR:-0.0.0.0}:1700:1700/udp"
+    volumes:
+      - ./configuration/chirpstack-gateway-bridge:/etc/chirpstack-gateway-bridge:ro
+    environment:
+      # El prefijo de los tópicos DEBE ser el id de la región (au915_1).
+      # Si queda en eu868 (el default del ejemplo oficial), el bridge publica
+      # en tópicos que ChirpStack no escucha: los paquetes llegan y se pierden
+      # en silencio, sin un solo error en los logs.
+      - INTEGRATION__MQTT__EVENT_TOPIC_TEMPLATE=${CHIRPSTACK_REGION}/gateway/{{ .GatewayID }}/event/{{ .EventType }}
+      - INTEGRATION__MQTT__STATE_TOPIC_TEMPLATE=${CHIRPSTACK_REGION}/gateway/{{ .GatewayID }}/state/{{ .StateType }}
+      - INTEGRATION__MQTT__COMMAND_TOPIC_TEMPLATE=${CHIRPSTACK_REGION}/gateway/{{ .GatewayID }}/command/#
+    depends_on:
+      mosquitto:
+        condition: service_started
+    networks:
+      - lorawan-network
+
+  # ---------------------------------------------------------------------------
+  # Broker MQTT. Propio del banco: NO es el aura-mosquitto de aura-app.
+  # ---------------------------------------------------------------------------
+  mosquitto:
+    image: eclipse-mosquitto:2
+    container_name: lorawan-mosquitto
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:1883:1883"
+    volumes:
+      - ./configuration/mosquitto/config/:/mosquitto/config/:ro
+      - mosquitto_data:/mosquitto/data
+      - mosquitto_log:/mosquitto/log
+    networks:
+      - lorawan-network
+
+  # ---------------------------------------------------------------------------
+  # Estado de ChirpStack: tenants, gateways, dispositivos, claves de sesión.
+  # Sin puerto publicado: solo lo usa chirpstack por la red interna.
+  # ---------------------------------------------------------------------------
+  postgres:
+    image: postgres:15-alpine
+    container_name: lorawan-postgres
+    restart: unless-stopped
+    environment:
+      - POSTGRES_USER=chirpstack
+      - POSTGRES_PASSWORD=${POSTGRESQL_PASSWORD}
+      - POSTGRES_DB=chirpstack
+    volumes:
+      # Crea las extensiones pg_trgm y hstore que ChirpStack necesita.
+      - ./configuration/postgresql/initdb:/docker-entrypoint-initdb.d:ro
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U chirpstack -d chirpstack"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - lorawan-network
+
+  # ---------------------------------------------------------------------------
+  # Sesiones de dispositivos y colas de downlink.
+  # ---------------------------------------------------------------------------
+  redis:
+    image: redis:7-alpine
+    container_name: lorawan-redis
+    restart: unless-stopped
+    command: redis-server --save 300 1 --save 60 100 --appendonly no
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - lorawan-network
+
+volumes:
+  postgres_data:
+  redis_data:
+  mosquitto_data:
+  mosquitto_log:
+
+networks:
+  lorawan-network:
+    driver: bridge
+    name: lorawan-network

@@ -1,0 +1,11 @@
+# Credenciales reales: solo se versiona .env.example
+.env
+
+# Claves OTAA del nodo (DevEUI / JoinEUI / AppKey generadas en ChirpStack).
+# Ver firmware/nodo_lorawan/credenciales.h.example
+firmware/nodo_lorawan/credenciales.h
+
+# Basura del sistema
+*.swp
+*~
+.DS_Store

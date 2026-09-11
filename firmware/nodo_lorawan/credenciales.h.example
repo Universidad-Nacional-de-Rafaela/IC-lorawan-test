@@ -1,0 +1,42 @@
+/*
+ * Credenciales OTAA del nodo — PLANTILLA
+ *
+ * Copiar a credenciales.h y completar con los valores que genera ChirpStack
+ * al dar de alta el dispositivo. credenciales.h está en .gitignore: las claves
+ * NO van al repo.
+ *
+ * Dónde sacar cada valor en la web de ChirpStack (http://localhost:8080):
+ *   Applications -> [tu app] -> Devices -> [tu device]
+ *     - DevEUI  : pestaña Configuration
+ *     - JoinEUI : pestaña Configuration (figura como "Join EUI")
+ *     - AppKey  : pestaña OTAA keys ("Application key")
+ *     - NwkKey  : pestaña OTAA keys ("Network key")
+ *
+ * OJO con el orden de bytes: acá van en MSB (el mismo orden en que los muestra
+ * la web de ChirpStack, de izquierda a derecha). Es el error clásico — con los
+ * bytes al revés el JoinRequest sale pero nunca llega el JoinAccept.
+ */
+
+#ifndef CREDENCIALES_H
+#define CREDENCIALES_H
+
+// Identificadores del dispositivo (8 bytes cada uno, en MSB).
+static const uint64_t JOIN_EUI = 0x0000000000000000;
+static const uint64_t DEV_EUI  = 0x0000000000000000;
+
+// Clave de root (16 bytes, en MSB). En LoRaWAN 1.0.x es la única que hace
+// falta: es la que ChirpStack muestra como "Application key".
+static const uint8_t APP_KEY[] = {
+  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
+};
+
+// NO declarar una NWK_KEY para LoRaWAN 1.0.x.
+//
+// RadioLib elige la versión de LoRaWAN según si el puntero nwkKey es nulo o no
+// (LoRaWAN.cpp:675). Un array de 16 ceros es un puntero VÁLIDO, así que lo pone
+// en modo 1.1 y calcula el MIC del JoinRequest con la clave equivocada: el
+// JoinRequest sale, ChirpStack lo descarta y nunca llega el JoinAccept.
+// Por eso nodo_lorawan.ino pasa nullptr en ese argumento.
+
+#endif  // CREDENCIALES_H
