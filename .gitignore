@@ -9,3 +9,6 @@ firmware/nodo_lorawan/credenciales.h
 *.swp
 *~
 .DS_Store
+
+# Series de las pruebas de alcance
+alcance-*.csv
