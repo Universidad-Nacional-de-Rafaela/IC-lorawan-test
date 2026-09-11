@@ -19,7 +19,22 @@
  */
 
 #include <RadioLib.h>
+#include <Preferences.h>
 #include "credenciales.h"
+
+// ===== PERSISTENCIA EN NVS =====
+// Guarda los nonces y la sesion LoRaWAN en la memoria no volatil del ESP32.
+//
+// SIN ESTO EL NODO NO PUEDE REINICIARSE. RadioLib arranca el DevNonce en 0
+// (LoRaWAN.cpp:298) y lo incrementa por cada JoinRequest. ChirpStack lleva la
+// lista de nonces ya usados para rechazar replays, asi que el segundo arranque
+// manda un nonce repetido y el join se rechaza. Desde el monitor serie se ve
+// igual que si no hubiera cobertura: el nodo transmite y nadie le contesta.
+Preferences almacen;
+
+const char* NVS_ESPACIO = "lorawan";
+const char* NVS_NONCES  = "nonces";
+const char* NVS_SESION  = "sesion";
 
 // ===== PINES DEL WIO-SX1262 =====
 // Valores del conector B2B del kit XIAO ESP32S3 + Wio-SX1262.
@@ -91,15 +106,30 @@ void setup() {
   // Para LoRaWAN 1.0.x va nullptr y la unica clave es APP_KEY.
   node.beginOTAA(JOIN_EUI, DEV_EUI, nullptr, APP_KEY);
 
+  // Recuperar lo guardado ANTES de activar: beginOTAA() limpia los nonces, asi
+  // que restaurarlos antes no serviria de nada.
+  almacen.begin(NVS_ESPACIO, false);
+  restaurarBuffer(NVS_NONCES, RADIOLIB_LORAWAN_NONCES_BUF_SIZE, true);
+  restaurarBuffer(NVS_SESION, RADIOLIB_LORAWAN_SESSION_BUF_SIZE, false);
+
   estado = node.activateOTAA();
   if (estado != RADIOLIB_LORAWAN_NEW_SESSION && estado != RADIOLIB_LORAWAN_SESSION_RESTORED) {
     Serial.print(F("FALLO, codigo "));
     Serial.println(estado);
-    Serial.println(F("Si el JoinRequest aparece en ChirpStack pero no vuelve el Accept,"));
-    Serial.println(F("las claves de credenciales.h no coinciden con las del device."));
+    Serial.println(F("Si el JoinRequest aparece en ChirpStack pero no vuelve el Accept:"));
+    Serial.println(F("  - claves de credenciales.h distintas a las del device, o"));
+    Serial.println(F("  - DevNonce repetido (correr scripts/reset-nonces.sh)."));
     detener();
   }
-  Serial.println(F("OK - unido a la red"));
+
+  if (estado == RADIOLIB_LORAWAN_SESSION_RESTORED) {
+    Serial.println(F("OK - sesion anterior recuperada, sin join"));
+  } else {
+    Serial.println(F("OK - join nuevo"));
+  }
+
+  // El join consume un DevNonce: guardarlo YA, antes de cualquier otra cosa.
+  guardarBuffer(NVS_NONCES, node.getBufferNonces(), RADIOLIB_LORAWAN_NONCES_BUF_SIZE);
   Serial.println();
 
   ultimoEnvio = millis() - INTERVALO_ENVIO;   // primer envio inmediato
@@ -141,7 +171,36 @@ void enviarContador() {
     Serial.println(estado);
   }
 
+  // Guardar la sesion para que el proximo arranque no tenga que rehacer el join.
+  // Es una escritura de NVS por uplink; con un envio por minuto el desgaste de
+  // flash es despreciable frente al wear leveling del ESP32. Si algun dia se
+  // envia cada pocos segundos, conviene espaciarlo.
+  guardarBuffer(NVS_SESION, node.getBufferSession(), RADIOLIB_LORAWAN_SESSION_BUF_SIZE);
+
   contador++;
+}
+
+// ===== PERSISTENCIA =====
+// Devuelve true si habia algo valido guardado y se aplico.
+bool restaurarBuffer(const char* clave, size_t tam, bool esNonces) {
+  if (!almacen.isKey(clave)) {
+    return false;
+  }
+
+  uint8_t buffer[tam];
+  if (almacen.getBytes(clave, buffer, tam) != tam) {
+    return false;   // guardado incompleto: se descarta y se hace join nuevo
+  }
+
+  // setBuffer*() valida un checksum interno, asi que un buffer corrupto o en
+  // blanco se rechaza solo: no hace falta chequearlo aca.
+  int16_t estado = esNonces ? node.setBufferNonces(buffer)
+                            : node.setBufferSession(buffer);
+  return estado == RADIOLIB_ERR_NONE;
+}
+
+void guardarBuffer(const char* clave, const uint8_t* datos, size_t tam) {
+  almacen.putBytes(clave, datos, tam);
 }
 
 // ===== UTILIDADES =====

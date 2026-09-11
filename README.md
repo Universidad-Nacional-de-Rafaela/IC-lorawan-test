@@ -50,6 +50,17 @@ misma; no es un error de tipeo.
 Hay que apagarlo (*Network Server → General → Enable: OFF*) y dejar el gateway en modo packet
 forwarder puro.
 
+**4. Un nodo que no persista sus nonces no puede reiniciarse.** RadioLib arranca el DevNonce en
+cero y lo incrementa por cada JoinRequest; ChirpStack lleva la lista de los ya usados para
+rechazar replays. Un nodo que vuelva a arrancar desde cero manda un nonce repetido y su join se
+rechaza — y desde el monitor serie se ve idéntico a no tener cobertura. `nodo_lorawan.ino` guarda
+nonces y sesión en la NVS del ESP32, así que sobrevive a los reinicios; para firmware ajeno que no
+lo haga, está `scripts/reset-nonces.sh`.
+
+Y una que rompe distinto: **RadioLib elige la versión de LoRaWAN por el puntero `nwkKey`** de
+`beginOTAA()`. Si no es nulo pasa a modo 1.1 y calcula el MIC del JoinRequest con la clave
+equivocada. Un array de 16 ceros es un puntero válido, así que para LoRaWAN 1.0.x va `nullptr`.
+
 ## Estructura
 
 ```
@@ -63,6 +74,7 @@ configuration/
   postgresql/initdb/                   crea las extensiones pg_trgm y hstore
   codec-contador.js                    decodificador para pegar en ChirpStack
 scripts/escuchar.sh                    suscriptor MQTT
+scripts/reset-nonces.sh                destraba un join rechazado por DevNonce repetido
 firmware/nodo_lorawan/                 sketch Arduino del nodo
 ```
 
