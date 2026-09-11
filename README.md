@@ -31,10 +31,10 @@ docker compose up -d
 ./scripts/escuchar.sh          # ver el tráfico MQTT en vivo
 ```
 
-## Los tres cuidados que hacen fallar esto en silencio
+## Los cuatro cuidados que hacen fallar esto en silencio
 
 Casi todos los problemas de un setup LoRaWAN no dan error: los paquetes simplemente se pierden y
-no hay nada en los logs. Estos son los tres que importan:
+no hay nada en los logs. Estos son los que importan:
 
 **1. La región tiene que coincidir en las tres puntas.** El packet forwarder del gateway, el
 `enabled_regions` de `chirpstack.toml` y el prefijo de los tópicos MQTT del gateway-bridge. Si el
