@@ -123,6 +123,8 @@ configuration/
   postgresql/initdb/                   crea las extensiones pg_trgm y hstore
   codec-contador.js                    decodificador para pegar en ChirpStack
 scripts/escuchar.sh                    suscriptor MQTT
+scripts/generar-credenciales.sh        arma el credenciales.h de un nodo desde ChirpStack
+scripts/registrar-alcance.sh           registra uplinks a CSV para pruebas de alcance
 scripts/reset-nonces.sh                destraba un join rechazado por DevNonce repetido
 firmware/nodo_lorawan/                 sketch Arduino del nodo
 ```
