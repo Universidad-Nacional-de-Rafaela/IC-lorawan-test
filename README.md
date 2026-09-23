@@ -13,6 +13,53 @@ paquetes que llegan por varios gateways, lleva los contadores de frame anti-repl
 handshake de join y decide data rate y potencia de cada nodo (ADR). Su salida es MQTT, así que del
 lado de tu código un nodo LoRaWAN se ve igual que cualquier otro: un JSON en un tópico.
 
+## Si sos alumno: empezá por acá
+
+**No levantes el stack de Docker.** En el aula hay **un solo gateway y un solo network
+server**, los de la cátedra. El resto del repo es para entender cómo está armado ese
+servidor, no para correrlo.
+
+Si levantás tu propio ChirpStack, tu nodo igual va a transmitir contra el gateway del aula,
+que reenvía al servidor de la cátedra — no al tuyo. Vas a ver un `JoinRequest` que nadie
+contesta y parece un problema de radio, cuando en realidad estás mirando el servidor
+equivocado.
+
+Lo que sí tenés que hacer:
+
+1. **Pedile al docente las claves de tu dispositivo**: `JOIN_EUI`, `DEV_EUI` y la
+   *Application key*. Cada uno tiene las suyas — dos nodos con el mismo `DEV_EUI` se pisan
+   y ninguno funciona bien.
+2. **Instalá RadioLib** desde el gestor de librerías del IDE de Arduino.
+3. **Creá tu `credenciales.h`** a partir de la plantilla, y completalo con tus claves:
+   ```bash
+   cd firmware/nodo_lorawan
+   cp credenciales.h.example credenciales.h
+   ```
+   Ese archivo está en `.gitignore`: **tus claves no se suben al repo**.
+4. **Configurá el IDE**: placa `XIAO_ESP32S3`, y **USB CDC On Boot: Enabled** — sin eso el
+   monitor serie queda mudo y no vas a ver nada de lo que sigue.
+5. **Flasheá** `firmware/nodo_lorawan/nodo_lorawan.ino` y abrí el monitor a **115200**.
+
+Tenés que ver:
+
+```
+=== Banco LoRaWAN UNRaf - nodo de prueba ===
+Iniciando radio SX1262... OK
+Uniendo a la red (OTAA)... OK - join nuevo
+[TX] contador=0 ... enviado (sin downlink)
+```
+
+Dónde se traba y qué significa:
+
+| Se cuelga en | Qué pasa |
+|---|---|
+| `Iniciando radio SX1262` | La radio no responde. Módulo mal encastrado, o placa distinta al kit XIAO + Wio-SX1262 (el pinout del sketch es de ese kit). |
+| `Uniendo a la red` | El join no cierra: claves mal copiadas, o el docente todavía no dio de alta tu dispositivo. |
+
+El firmware está escrito para el kit **XIAO ESP32S3 + Wio-SX1262** con conector B2B. En otra
+placa los pines no coinciden: compila igual y no transmite nada. Los `#define` del pinout
+están al principio del sketch.
+
 ## Datos del banco
 
 | | |
@@ -22,7 +69,9 @@ lado de tu código un nodo LoRaWAN se ve igual que cualquier otro: un JSON en un
 | Red del cable | notebook `192.168.23.100` ↔ gateway `192.168.23.150` |
 | Web de ChirpStack | http://localhost:8080 (`admin` / `admin`) |
 
-## Arranque rápido
+## Arranque del servidor (cátedra)
+
+Esto lo corre quien monta el banco, una sola vez. Si sos alumno, saltealo.
 
 ```bash
 cp .env.example .env
