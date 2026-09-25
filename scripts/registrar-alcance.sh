@@ -30,7 +30,16 @@ echo
 
 docker exec "$CONTENEDOR" mosquitto_sub -h localhost -t 'application/+/device/+/event/up' \
   | python3 -u -c '
-import sys, json, datetime
+import sys, json, datetime, base64
+
+# Sin codec en el device profile ChirpStack no manda "object", solo el payload
+# crudo en base64: en ese caso se arman los 2 bytes big-endian a mano.
+def contador(d):
+    obj = d.get("object") or {}
+    if "contador" in obj:
+        return obj["contador"]
+    crudo = base64.b64decode(d.get("data") or "")
+    return (crudo[0] << 8) | crudo[1] if len(crudo) >= 2 else None
 
 for linea in sys.stdin:
     linea = linea.strip()
@@ -49,7 +58,7 @@ for linea in sys.stdin:
         (d.get("txInfo") or {}).get("frequency"),
         rx.get("rssi"),
         rx.get("snr"),
-        (d.get("object") or {}).get("contador"),
+        contador(d),
     ]
     fila = ["" if v is None else v for v in fila]
     print(",".join(str(v) for v in fila), flush=True)
