@@ -168,12 +168,41 @@ Cada paso valida el anterior. Si uno falla, los siguientes no tienen sentido.
    y detrás el `JoinAccept`. Si está el request pero no el accept, las claves OTAA no coinciden.
 7. **Cadena completa** — `./scripts/escuchar.sh app` imprime el contador incrementándose cada 20 s.
 
-## Pendiente: integración con AURA
+## Integración con AURA
 
-ChirpStack publica en `application/<id>/device/<devEUI>/event/up`. El contrato de AURA
-(`../aura/aura-app/docs/CONTRATO_MQTT.md` v1.1) exige `devices/<uuid>/data`, con el identificador
-**en el tópico** y como **UUID**, no como DevEUI.
+Este stack es el camino por el que llegan los dispositivos de **AURA**, la plataforma IoT del
+campus: los primeros nodos del proyecto son LoRaWAN, no la mesh ESP-NOW que se había prototipado
+antes (esa quedó congelada en el repo público
+[`aura-firmware`](https://github.com/Universidad-Nacional-de-Rafaela/aura-firmware)).
 
-Cerrar esa brecha necesita un servicio puente y una decisión de mapeo DevEUI→UUID — el mismo
-problema que `nodo_gateway.ino` resuelve hoy con una tabla hardcodeada. Es una decisión de
-arquitectura que merece su propio ADR antes de escribir código.
+ChirpStack y AURA no se hablan directamente. En el medio va un **`lorawan-bridge`**, que todavía
+no está implementado, con esta tarea:
+
+```
+ChirpStack                                          AURA
+application/<appId>/device/<devEUI>/event/up   ─►   devices/<uuid>/data     {"values": …}
+                          (join, status, up)   ─►   devices/<uuid>/status   (retain)
+                                                    devices/<uuid>/command  ◄─ backend
+downlink encolado por la API de ChirpStack     ◄─
+            (encolado, txack, ack)             ─►   devices/<uuid>/response
+```
+
+Tres convenciones que tienen que respetar los dispositivos que se den de alta en ChirpStack:
+
+1. **Una sola aplicación, `aura`.** El bridge escucha `application/<appId>/device/+/event/+` de esa
+   aplicación y nada más. Un dispositivo cargado en otra aplicación no llega.
+2. **Cada dispositivo lleva el tag `aura_device_id`** con su UUID de AURA. Es la única forma de
+   pasar del DevEUI al UUID que AURA usa en los tópicos. **Un dispositivo sin ese tag se descarta**
+   con un warning en el log del bridge: no llega nada, como casi todo lo que falla en LoRaWAN.
+3. **El codec va en el device profile y devuelve solo mediciones.** Lo que devuelve
+   `decodeUplink` en `data` llega tal cual a AURA dentro de `values`, así que no hay que mezclar
+   ahí RSSI, contadores ni diagnósticos: esos datos los arma el bridge desde el uplink y van a
+   `status`. Para recibir comandos, el mismo profile necesita `encodeDownlink` y el tag
+   `aura_max_downlink_bytes`; sin ese tag el bridge rechaza los comandos a ese tipo de
+   dispositivo.
+
+El `deduplicationId` de cada uplink viaja a AURA como `ingest_id`: es lo que permite descartar un
+mismo dato que llega dos veces, sin importar cuántos gateways lo hayan escuchado.
+
+El contrato completo (tópicos, payloads, QoS, estados de respuesta) es el `CONTRATO_MQTT.md` v2.0
+del repositorio de AURA.
