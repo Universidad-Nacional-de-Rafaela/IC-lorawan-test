@@ -61,13 +61,49 @@ const uint8_t       SUBBANDA = 2;
 
 LoRaWANNode node(&radio, &Region, SUBBANDA);
 
+// ===== DATA RATE FIJO =====
+// Para pruebas de alcance el ADR molesta: cerca del gateway el servidor sube
+// el nodo a DR5 (SF7), y al alejarse no lo baja hasta que se pierden decenas
+// de uplinks. Lo que se mediria es el alcance de SF7, no el de la red.
+// Con ADR apagado el nodo transmite siempre a DATARATE.
+//
+// AU915: DR0 = SF12 ... DR5 = SF7, todos a 125 kHz. DR2 (SF10) es el mas
+// lento que respeta el dwell time de 400 ms con este payload (~370 ms en el
+// aire): con DR0 o DR1 cada sendReceive() falla con
+// RADIOLIB_ERR_DWELL_TIME_EXCEEDED sin transmitir. Para volver al ADR:
+// USAR_ADR = true.
+const bool    USAR_ADR = false;
+const uint8_t DATARATE = 2;
+
 // ===== TEMPORIZACIÓN =====
-// 60 s es cómodo para probar. En producción hay que subirlo bastante: el
-// fair-use de LoRaWAN son unos 30 s de aire por día por dispositivo.
-const unsigned long INTERVALO_ENVIO = 60000UL;
+// 20 s es para pruebas de alcance caminando: da un punto cada pocos metros.
+// En producción hay que subirlo bastante: el fair-use de LoRaWAN son unos
+// 30 s de aire por día por dispositivo.
+const unsigned long INTERVALO_ENVIO = 20000UL;
 unsigned long ultimoEnvio = 0;
 
 uint16_t contador = 0;
+
+// ===== REINTENTOS =====
+// Cada lectura se manda como uplink CONFIRMADO: ChirpStack responde con un ACK
+// en RX1 o RX2. Si el ACK no vuelve -porque el uplink no llego al gateway, o
+// porque llego pero el ACK se perdio de vuelta- se reintenta hasta
+// MAX_INTENTOS veces antes de darla por perdida y pasar a la siguiente.
+//
+// El costo: el gateway es half-duplex, y mientras transmite un ACK no escucha
+// a nadie. Con muchos nodos confirmando cada minuto, los ACK mismos empiezan a
+// tapar uplinks ajenos. Para un aula alcanza; para una red cargada conviene
+// CONFIRMADO = false, y entonces solo se reintentan los errores locales de la
+// radio (el nodo no tiene forma de saber si el paquete llego).
+const bool          CONFIRMADO   = true;
+const uint8_t       MAX_INTENTOS = 3;
+//
+// Las esperas estan pensadas para que los reintentos entren, casi siempre,
+// dentro de INTERVALO_ENVIO: cada intento sin ACK ya tarda unos 4-6 s entre
+// ventanas RX y el RETRANSMIT_TIMEOUT de RadioLib. Si se pasan, el proximo
+// envio sale apenas terminan.
+const unsigned long ESPERA_BASE  = 2000UL;   // se duplica en cada reintento
+const unsigned long ESPERA_AZAR  = 1000UL;   // jitter, ver esperarReintento()
 
 // ===== SETUP =====
 void setup() {
@@ -130,6 +166,8 @@ void setup() {
 
   // El join consume un DevNonce: guardarlo YA, antes de cualquier otra cosa.
   guardarBuffer(NVS_NONCES, node.getBufferNonces(), RADIOLIB_LORAWAN_NONCES_BUF_SIZE);
+
+  fijarDatarate();
   Serial.println();
 
   ultimoEnvio = millis() - INTERVALO_ENVIO;   // primer envio inmediato
@@ -150,34 +188,137 @@ void loop() {
 // ===== ENVIO =====
 void enviarContador() {
   // Payload de 2 bytes, big-endian. El codec de ChirpStack lo vuelve a armar.
+  // Todos los reintentos llevan el mismo contador: si un ACK se pierde y el
+  // uplink si habia llegado, del lado del servidor se ve el valor repetido.
   uint8_t payload[2];
   payload[0] = (contador >> 8) & 0xFF;
   payload[1] = contador & 0xFF;
 
-  Serial.print(F("[TX] contador="));
-  Serial.print(contador);
-  Serial.print(F(" ... "));
+  bool entregado = false;
+  for (uint8_t intento = 1; intento <= MAX_INTENTOS && !entregado; intento++) {
+    if (intento > 1) {
+      esperarReintento(intento);
+    }
 
-  // sendReceive() manda el uplink y abre las ventanas RX1/RX2.
-  int estado = node.sendReceive(payload, sizeof(payload));
+    Serial.print(F("[TX] contador="));
+    Serial.print(contador);
+    Serial.print(F(" intento "));
+    Serial.print(intento);
+    Serial.print('/');
+    Serial.print(MAX_INTENTOS);
+    Serial.print(F(" ... "));
 
-  if (estado == RADIOLIB_ERR_NONE) {
-    Serial.println(F("enviado (sin downlink)"));
-  } else if (estado > 0) {
-    Serial.print(F("enviado + downlink en ventana RX"));
-    Serial.println(estado);
-  } else {
-    Serial.print(F("ERROR, codigo "));
-    Serial.println(estado);
+    entregado = intentarEnvio(payload, sizeof(payload));
   }
 
-  // Guardar la sesion para que el proximo arranque no tenga que rehacer el join.
-  // Es una escritura de NVS por uplink; con un envio por minuto el desgaste de
-  // flash es despreciable frente al wear leveling del ESP32. Si algun dia se
-  // envia cada pocos segundos, conviene espaciarlo.
-  guardarBuffer(NVS_SESION, node.getBufferSession(), RADIOLIB_LORAWAN_SESSION_BUF_SIZE);
+  if (!entregado) {
+    Serial.println(F("[TX] PERDIDO: se agotaron los intentos, sigue con el proximo"));
+  }
 
   contador++;
+}
+
+// Un intento de uplink. Devuelve true si el dato quedo entregado.
+bool intentarEnvio(const uint8_t* payload, size_t tam) {
+  // sendReceive() solo completa el evento de bajada si llega un downlink, asi
+  // que tiene que arrancar en cero. El ACK se lee de aca y no del evento de
+  // subida: en RadioLib 7.7.1 eventUp->confirming sale siempre en false.
+  LoRaWANEvent_t bajada = {};
+
+  // sendReceive() manda el uplink y abre las ventanas RX1/RX2.
+  int estado = node.sendReceive(payload, tam, 1, CONFIRMADO, nullptr, &bajada);
+
+  // Guardar la sesion en CADA intento, no solo en los exitosos: aun con error
+  // RadioLib avanza el FCnt, y si el nodo se reinicia con uno viejo ChirpStack
+  // descarta los uplinks por contador repetido. Son hasta MAX_INTENTOS
+  // escrituras de NVS por envio; frente al wear leveling del ESP32 sigue
+  // siendo despreciable. Si algun dia se envia cada pocos segundos, conviene
+  // espaciarlo.
+  guardarBuffer(NVS_SESION, node.getBufferSession(), RADIOLIB_LORAWAN_SESSION_BUF_SIZE);
+
+  if (estado == RADIOLIB_ERR_NETWORK_NOT_JOINED) {
+    // La sesion se invalido (RadioLib la borra, p.ej., si el servidor no
+    // responde un rekey). Reintentar el uplink asi no sirve: primero el join.
+    Serial.println(F("sin sesion"));
+    reunirse();
+    return false;
+  }
+
+  if (estado < RADIOLIB_ERR_NONE) {
+    Serial.print(F("ERROR, codigo "));
+    Serial.println(estado);
+    return false;
+  }
+
+  if (CONFIRMADO && !bajada.confirming) {
+    Serial.println(F("sin ACK del servidor"));
+    return false;
+  }
+
+  if (estado > 0) {
+    Serial.print(CONFIRMADO ? F("confirmado, ACK en RX") : F("enviado + downlink en RX"));
+    Serial.println(estado);
+  } else {
+    Serial.println(F("enviado (sin downlink)"));
+  }
+  return true;
+}
+
+// Espera exponencial con un poco de azar. El azar importa en el aula: si dos
+// nodos chocaron en el aire, sin jitter reintentarian al mismo tiempo y
+// volverian a chocar.
+void esperarReintento(uint8_t intento) {
+  unsigned long espera = (ESPERA_BASE << (intento - 2)) + random(ESPERA_AZAR);
+
+  // Si RadioLib todavia no habilita el proximo uplink (duty cycle, dwell
+  // time), esperar al menos eso: si no, sendReceive() falla sin transmitir.
+  unsigned long minimo = node.timeUntilUplink();
+  if (espera < minimo) {
+    espera = minimo;
+  }
+
+  Serial.print(F("     reintento en "));
+  Serial.print(espera / 1000.0, 1);
+  Serial.println(F(" s"));
+  delay(espera);
+}
+
+// Rehace el join OTAA despues de perder la sesion. Si falla no se detiene: el
+// proximo intento vuelve a encontrar el nodo sin sesion y lo prueba de nuevo.
+void reunirse() {
+  Serial.print(F("     rehaciendo el join... "));
+  int estado = node.activateOTAA();
+
+  // Cada JoinRequest consume un DevNonce, haya respuesta o no.
+  guardarBuffer(NVS_NONCES, node.getBufferNonces(), RADIOLIB_LORAWAN_NONCES_BUF_SIZE);
+
+  if (estado == RADIOLIB_LORAWAN_NEW_SESSION) {
+    Serial.println(F("OK"));
+    fijarDatarate();   // el join nuevo vuelve al data rate por defecto
+  } else {
+    Serial.print(F("FALLO, codigo "));
+    Serial.println(estado);
+  }
+}
+
+// Se llama despues de cada join: activateOTAA() arma la sesion con el data
+// rate por defecto, y la sesion restaurada trae el ultimo que eligio el ADR.
+void fijarDatarate() {
+  node.setADR(USAR_ADR);
+  if (USAR_ADR) {
+    Serial.println(F("Data rate: ADR (lo elige ChirpStack)"));
+    return;
+  }
+
+  int16_t estado = node.setDatarate(DATARATE);
+  Serial.print(F("Data rate: DR"));
+  Serial.print(DATARATE);
+  if (estado == RADIOLIB_ERR_NONE) {
+    Serial.println(F(" fijo, ADR apagado"));
+  } else {
+    Serial.print(F(" rechazado, codigo "));
+    Serial.println(estado);
+  }
 }
 
 // ===== PERSISTENCIA =====

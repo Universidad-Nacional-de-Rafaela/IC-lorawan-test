@@ -46,8 +46,13 @@ Tenés que ver:
 === Banco LoRaWAN UNRaf - nodo de prueba ===
 Iniciando radio SX1262... OK
 Uniendo a la red (OTAA)... OK - join nuevo
-[TX] contador=0 ... enviado (sin downlink)
+[TX] contador=0 intento 1/3 ... confirmado, ACK en RX1
 ```
+
+Cada lectura va como uplink **confirmado**: si el ACK de ChirpStack no vuelve, el nodo
+reintenta (hasta 3 veces, esperando 2 s, 4 s, más un poco de azar) y recién después la da
+por perdida con `[TX] PERDIDO`. Si el uplink había llegado y lo que se perdió fue el ACK, el
+reintento lleva el mismo contador: en el servidor ese valor aparece dos veces. No es un error.
 
 Dónde se traba y qué significa:
 
@@ -55,6 +60,7 @@ Dónde se traba y qué significa:
 |---|---|
 | `Iniciando radio SX1262` | La radio no responde. Módulo mal encastrado, o placa distinta al kit XIAO + Wio-SX1262 (el pinout del sketch es de ese kit). |
 | `Uniendo a la red` | El join no cierra: claves mal copiadas, o el docente todavía no dio de alta tu dispositivo. |
+| `sin ACK del servidor` en todos los intentos | El uplink no llega o el ACK no vuelve: poca cobertura, antena floja, o el gateway saturado de tráfico. |
 
 El firmware está escrito para el kit **XIAO ESP32S3 + Wio-SX1262** con conector B2B. En otra
 placa los pines no coinciden: compila igual y no transmite nada. Los `#define` del pinout
@@ -160,7 +166,7 @@ Cada paso valida el anterior. Si uno falla, los siguientes no tienen sentido.
    ningún nodo encendido.
 6. **Join del nodo** — al encender la XIAO, en *Device → LoRaWAN frames* aparece el `JoinRequest`
    y detrás el `JoinAccept`. Si está el request pero no el accept, las claves OTAA no coinciden.
-7. **Cadena completa** — `./scripts/escuchar.sh app` imprime el contador incrementándose cada 60 s.
+7. **Cadena completa** — `./scripts/escuchar.sh app` imprime el contador incrementándose cada 20 s.
 
 ## Pendiente: integración con AURA
 
