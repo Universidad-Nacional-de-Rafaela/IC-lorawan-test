@@ -13,6 +13,16 @@ paquetes que llegan por varios gateways, lleva los contadores de frame anti-repl
 handshake de join y decide data rate y potencia de cada nodo (ADR). Su salida es MQTT, así que del
 lado de tu código un nodo LoRaWAN se ve igual que cualquier otro: un JSON en un tópico.
 
+## Para qué es este repo
+
+Es material de **Ingeniería en Computación III**. Sirve para que aprendas a configurar tu
+ESP32 para que se una a la red LoRaWAN del aula a través del gateway de la cátedra, y para
+que después puedas armar tus propios dispositivos que se conecten a ese mismo gateway. El
+nodo de ejemplo (un contador que se envía cada 20 s) es solo el punto de partida.
+
+No es parte de ningún proyecto en particular: no hay nada acá que sea específico de AURA
+ni de otro sistema.
+
 ## Si sos alumno: empezá por acá
 
 **No levantes el stack de Docker.** En el aula hay **un solo gateway y un solo network
@@ -147,8 +157,8 @@ Nada se publica en `0.0.0.0` salvo el puerto 1700 mientras `UDP_BIND_ADDR` siga 
 inicial. Una vez configurada la red del cable conviene pasarlo a `192.168.23.100` para que el
 puerto no quede expuesto en el WiFi de la facultad.
 
-Este stack tiene **su propio Mosquitto**: no toca el `aura-mosquitto` de `aura-app`, ni su red
-`aura-network`. Se puede levantar y destruir sin afectar a AURA.
+Este stack tiene **su propio Mosquitto** y su propia red de Docker: se puede levantar y destruir
+sin afectar a otros stacks que corran en la misma máquina.
 
 ## Verificación, en orden
 
@@ -168,41 +178,10 @@ Cada paso valida el anterior. Si uno falla, los siguientes no tienen sentido.
    y detrás el `JoinAccept`. Si está el request pero no el accept, las claves OTAA no coinciden.
 7. **Cadena completa** — `./scripts/escuchar.sh app` imprime el contador incrementándose cada 20 s.
 
-## Integración con AURA
+## Si querés conectar este stack a otro sistema
 
-Este stack es el camino por el que llegan los dispositivos de **AURA**, la plataforma IoT del
-campus: los primeros nodos del proyecto son LoRaWAN, no la mesh ESP-NOW que se había prototipado
-antes (esa quedó congelada en el repo público
-[`aura-firmware`](https://github.com/Universidad-Nacional-de-Rafaela/aura-firmware)).
-
-ChirpStack y AURA no se hablan directamente. En el medio va un **`lorawan-bridge`**, que todavía
-no está implementado, con esta tarea:
-
-```
-ChirpStack                                          AURA
-application/<appId>/device/<devEUI>/event/up   ─►   devices/<uuid>/data     {"values": …}
-                          (join, status, up)   ─►   devices/<uuid>/status   (retain)
-                                                    devices/<uuid>/command  ◄─ backend
-downlink encolado por la API de ChirpStack     ◄─
-            (encolado, txack, ack)             ─►   devices/<uuid>/response
-```
-
-Tres convenciones que tienen que respetar los dispositivos que se den de alta en ChirpStack:
-
-1. **Una sola aplicación, `aura`.** El bridge escucha `application/<appId>/device/+/event/+` de esa
-   aplicación y nada más. Un dispositivo cargado en otra aplicación no llega.
-2. **Cada dispositivo lleva el tag `aura_device_id`** con su UUID de AURA. Es la única forma de
-   pasar del DevEUI al UUID que AURA usa en los tópicos. **Un dispositivo sin ese tag se descarta**
-   con un warning en el log del bridge: no llega nada, como casi todo lo que falla en LoRaWAN.
-3. **El codec va en el device profile y devuelve solo mediciones.** Lo que devuelve
-   `decodeUplink` en `data` llega tal cual a AURA dentro de `values`, así que no hay que mezclar
-   ahí RSSI, contadores ni diagnósticos: esos datos los arma el bridge desde el uplink y van a
-   `status`. Para recibir comandos, el mismo profile necesita `encodeDownlink` y el tag
-   `aura_max_downlink_bytes`; sin ese tag el bridge rechaza los comandos a ese tipo de
-   dispositivo.
-
-El `deduplicationId` de cada uplink viaja a AURA como `ingest_id`: es lo que permite descartar un
-mismo dato que llega dos veces, sin importar cuántos gateways lo hayan escuchado.
-
-El contrato completo (tópicos, payloads, QoS, estados de respuesta) es el `CONTRATO_MQTT.md` v2.0
-del repositorio de AURA.
+Todo lo que ChirpStack recibe sale por MQTT (`application/<appId>/device/<devEUI>/event/up`), así
+que cualquier sistema puede consumirlo con un suscriptor. Las convenciones propias de cada
+sistema (qué aplicación usar, qué tags llevan los dispositivos, cómo se traducen los tópicos) se
+documentan en el repo de ese sistema, no acá. Por ejemplo, las de AURA están en su
+`CONTRATO_MQTT.md`.

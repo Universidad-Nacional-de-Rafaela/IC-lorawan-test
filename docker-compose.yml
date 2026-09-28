@@ -70,7 +70,7 @@ services:
       - lorawan-network
 
   # ---------------------------------------------------------------------------
-  # Broker MQTT. Propio del banco: NO es el aura-mosquitto de aura-app.
+  # Broker MQTT. Propio del banco: independiente de cualquier otro broker de la máquina.
   # ---------------------------------------------------------------------------
   mosquitto:
     image: eclipse-mosquitto:2
